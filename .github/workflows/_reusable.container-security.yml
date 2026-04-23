@@ -26,35 +26,37 @@ on:
         required: false
         type: string
         default: '.zap/rules.tsv'
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
 
-# All jobs in this workflow need packages:write to push to GHCR.
 # security-events:write is needed for SARIF uploads.
-# These are declared per-job to follow least-privilege.
+# Permissions are declared per-job to follow least-privilege.
 
 jobs:
   # -------------------------------------------------------------------------
-  # BUILD — builds the Docker image once and pushes to GHCR with the commit
-  # SHA as the tag. The SHA tag is immutable: it ties the image to the exact
-  # commit that produced it. latest is only added in the deploy stage after
-  # all scans pass.
+  # BUILD — builds the Docker image once and pushes to Docker Hub with the
+  # commit SHA as the tag. The SHA tag is immutable: it ties the image to the
+  # exact commit that produced it. latest is only added in the deploy stage
+  # after all scans pass.
   # -------------------------------------------------------------------------
   build:
     name: Build and push image
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     outputs:
       image-ref: ${{ inputs.image-name }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to GHCR
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Build and push with SHA tag
         uses: docker/build-push-action@v5
@@ -77,17 +79,15 @@ jobs:
     needs: build
     permissions:
       contents: read
-      packages: read
       security-events: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to GHCR
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Trivy scan — blocking
         uses: aquasecurity/trivy-action@master
@@ -149,18 +149,16 @@ jobs:
     needs: build
     permissions:
       contents: read
-      packages: read
       issues: write
       security-events: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to GHCR
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Start app from GHCR image
         run: |

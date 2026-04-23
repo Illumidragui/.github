@@ -1,0 +1,209 @@
+name: Reusable — Code Security
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: 'Project language: python or node'
+        required: true
+        type: string
+      python-version:
+        required: false
+        type: string
+        default: '3.12'
+      node-version:
+        required: false
+        type: string
+        default: '18'
+      run-tests:
+        description: 'Whether to run unit tests (set false for repos with no test suite)'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      SONAR_TOKEN:
+        required: true
+      SNYK_TOKEN:
+        required: true
+
+jobs:
+  # -------------------------------------------------------------------------
+  # GITLEAKS — blocks everything if secrets are found in the repo.
+  # Runs first because a leaked secret invalidates every subsequent result.
+  # -------------------------------------------------------------------------
+  gitleaks:
+    name: Gitleaks Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # -------------------------------------------------------------------------
+  # TEST — unit tests before any static scanner.
+  # Skipped when run-tests: false (e.g., pure static sites with no test suite).
+  # -------------------------------------------------------------------------
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    needs: gitleaks
+    if: inputs.run-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: inputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        if: inputs.language == 'python'
+        run: pip install -r requirements.txt
+
+      - name: Run Python tests
+        if: inputs.language == 'python'
+        run: python -m pytest tests/ -v
+
+      - name: Set up Node
+        if: inputs.language == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        if: inputs.language == 'node'
+        run: npm ci
+
+      - name: Run Node tests
+        if: inputs.language == 'node'
+        run: npm test
+
+  # -------------------------------------------------------------------------
+  # SONARCLOUD — SAST on source code. Runs in parallel with Snyk after tests.
+  # Condition handles both: tests ran and passed, or tests were skipped.
+  # -------------------------------------------------------------------------
+  sonarcloud:
+    name: SonarCloud Analysis
+    runs-on: ubuntu-latest
+    needs: [gitleaks, test]
+    if: |
+      always() &&
+      needs.gitleaks.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: SonarCloud Scan
+        uses: sonarsource/sonarqube-scan-action@v7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.host.url=https://sonarcloud.io
+      - name: SonarCloud summary
+        if: always()
+        run: |
+          echo "## SonarCloud SAST" >> $GITHUB_STEP_SUMMARY
+          echo "Analysis complete. Review results at [SonarCloud](https://sonarcloud.io)." >> $GITHUB_STEP_SUMMARY
+
+  # -------------------------------------------------------------------------
+  # SNYK — SCA on dependencies. Runs in parallel with SonarCloud.
+  # Two-pass pattern: first pass saves the report even if it fails,
+  # second pass enforces the threshold and fails the job if exceeded.
+  # -------------------------------------------------------------------------
+  snyk:
+    name: Snyk Dependency Scan
+    runs-on: ubuntu-latest
+    needs: [gitleaks, test]
+    if: |
+      always() &&
+      needs.gitleaks.result == 'success' &&
+      (needs.test.result == 'success' || needs.test.result == 'skipped')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: inputs.language == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: 'pip'
+
+      - name: Install Python dependencies
+        if: inputs.language == 'python'
+        run: pip install -r requirements.txt
+
+      - name: Set up Node
+        if: inputs.language == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        if: inputs.language == 'node'
+        run: npm ci
+
+      - name: Snyk scan — Python (save report)
+        if: inputs.language == 'python'
+        uses: snyk/actions/python@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --json-file-output=snyk-report.json
+
+      - name: Snyk scan — Node (save report)
+        if: inputs.language == 'node'
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high --json-file-output=snyk-report.json
+
+      - name: Upload Snyk report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-report
+          path: snyk-report.json
+          retention-days: 7
+
+      - name: Snyk — enforce threshold (Python)
+        if: inputs.language == 'python'
+        uses: snyk/actions/python@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+
+      - name: Snyk — enforce threshold (Node)
+        if: inputs.language == 'node'
+        uses: snyk/actions/node@master
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=high
+
+      - name: Snyk summary
+        if: always()
+        run: |
+          echo "## Snyk SCA" >> $GITHUB_STEP_SUMMARY
+          if [ -f snyk-report.json ]; then
+            high=$(jq '[.vulnerabilities[]? | select(.severity=="high")] | length' snyk-report.json 2>/dev/null || echo "?")
+            critical=$(jq '[.vulnerabilities[]? | select(.severity=="critical")] | length' snyk-report.json 2>/dev/null || echo "?")
+            echo "- HIGH: $high" >> $GITHUB_STEP_SUMMARY
+            echo "- CRITICAL: $critical" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Report not generated." >> $GITHUB_STEP_SUMMARY
+          fi

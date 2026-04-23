@@ -1,0 +1,47 @@
+name: Reusable — Deploy to Cloudflare Pages
+
+on:
+  workflow_call:
+    inputs:
+      artifact-name:
+        description: 'Name of the build artifact to download'
+        required: false
+        type: string
+        default: 'docusaurus-build'
+      build-dir:
+        description: 'Local path to extract the artifact into (must match wrangler deploy path)'
+        required: false
+        type: string
+        default: 'build'
+      cf-project-name:
+        description: 'Cloudflare Pages project name'
+        required: false
+        type: string
+        default: 'website'
+    secrets:
+      CLOUDFLARE_API_TOKEN:
+        required: true
+      CLOUDFLARE_ACCOUNT_ID:
+        required: true
+
+jobs:
+  deploy:
+    name: Deploy to Cloudflare Pages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    environment: cloudflare-pages
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.build-dir }}
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy ${{ inputs.build-dir }} --project-name=${{ inputs.cf-project-name }}

@@ -1,0 +1,57 @@
+name: Reusable — Build Static Site
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        required: false
+        type: string
+        default: '18'
+      site-url:
+        description: 'Public URL of the site (sets DOCUSAURUS_CONF_URL)'
+        required: false
+        type: string
+        default: 'https://shengjunye.me'
+      artifact-name:
+        description: 'Name for the uploaded build artifact'
+        required: false
+        type: string
+        default: 'docusaurus-build'
+    outputs:
+      image-tag:
+        description: 'Generated image tag (ga-YYYY.MM.DD-HHMM) for use in Docker deploys'
+        value: ${{ jobs.build.outputs.image-tag }}
+
+jobs:
+  build:
+    name: Build Docusaurus site
+    runs-on: ubuntu-latest
+    outputs:
+      image-tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+
+      - name: Generate image tag
+        id: tag
+        run: echo "tag=ga-$(date +%Y.%m.%d-%H%M)" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          DOCUSAURUS_CONF_URL: ${{ inputs.site-url }}
+          DOCKER_IMAGE_TAG: ${{ steps.tag.outputs.tag }}
+        run: npm run build
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: build/
+          retention-days: 1

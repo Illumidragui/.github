@@ -1,0 +1,33 @@
+name: CI Fast — dev push
+
+# Validates the reusable workflow files in THIS repo (.github).
+# Runs on every push to dev so broken workflow YAML is caught before merging.
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint-workflows:
+    name: Lint workflow YAML (actionlint)
+    runs-on: ubuntu-latest
+    needs: gitleaks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rhysd/actionlint@v1
+        with:
+          files: .github/workflows/*.yml

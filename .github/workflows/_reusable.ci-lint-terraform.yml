@@ -1,0 +1,63 @@
+name: Reusable — Terraform Lint
+
+on:
+  workflow_call:
+    inputs:
+      run-checkov:
+        description: 'Run Checkov IaC security scan (advisory only, soft_fail)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  # ─────────────────────────────────────────────────────────
+  # FORMAT + VALIDATE + TFLINT
+  # init with -backend=false avoids needing live AWS credentials.
+  # tflint catches provider-specific mistakes beyond what validate covers.
+  # ─────────────────────────────────────────────────────────
+  terraform-lint:
+    name: Terraform Fmt, Validate & tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Format check
+        run: terraform fmt -check -recursive
+      - name: Init (no backend)
+        run: terraform init -backend=false
+      - name: Validate
+        run: terraform validate
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - name: tflint init
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: tflint
+        run: tflint --recursive
+
+  # ─────────────────────────────────────────────────────────
+  # CHECKOV — IaC security scan (advisory, does not block the gate).
+  # Findings are uploaded to the GitHub Security tab.
+  # Once the baseline is established, tune suppressions in .checkov.yaml.
+  # ─────────────────────────────────────────────────────────
+  checkov:
+    name: Checkov IaC Security
+    runs-on: ubuntu-latest
+    if: inputs.run-checkov
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bridgecrewio/checkov-action@master
+        with:
+          framework: terraform
+          output_format: sarif
+          output_file_path: checkov-report.sarif
+          soft_fail: true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov-report.sarif

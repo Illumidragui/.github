@@ -1,0 +1,38 @@
+name: Reusable — Helm Lint
+
+on:
+  workflow_call:
+    inputs:
+      chart-dirs:
+        description: 'Space-separated list of chart directories relative to repo root'
+        required: true
+        type: string
+      add-argo-repo:
+        description: 'Add the Argo Helm repository (required when using argocd-apps charts)'
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  # ─────────────────────────────────────────────────────────
+  # LINT — runs `helm dependency update` before each lint so charts
+  # with external dependencies resolve cleanly.
+  # ─────────────────────────────────────────────────────────
+  helm-lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Add Argo Helm repository
+        if: inputs.add-argo-repo
+        run: |
+          helm repo add argo https://argoproj.github.io/argo-helm
+          helm repo update
+      - name: Lint charts
+        run: |
+          for chart in ${{ inputs.chart-dirs }}; do
+            echo "──────── $chart ────────"
+            helm dependency update "$chart" 2>/dev/null || true
+            helm lint "$chart"
+          done

@@ -1,0 +1,34 @@
+name: CI PR — Quality Gate
+
+# Full gate on PRs to main for the reusable workflow library.
+# Validates all workflow YAML and scans for secrets before merging.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint-workflows:
+    name: Lint workflow YAML (actionlint)
+    runs-on: ubuntu-latest
+    needs: gitleaks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rhysd/actionlint@v1
+        with:
+          files: .github/workflows/*.yml
